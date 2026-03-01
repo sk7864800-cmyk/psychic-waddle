@@ -1,0 +1,122 @@
+require("dotenv").config()
+const express = require("express")
+const mongoose = require("mongoose")
+const bcrypt = require("bcryptjs")
+const jwt = require("jsonwebtoken")
+const Razorpay = require("razorpay")
+const cors = require("cors")
+const path = require("path")
+
+const app = express()
+app.use(cors())
+app.use(express.json())
+app.use(express.static("public"))
+
+mongoose.connect(process.env.MONGO_URI)
+.then(()=>console.log("MongoDB Connected"))
+.catch(err=>console.log(err))
+
+/* ================= MODELS ================= */
+
+const User = mongoose.model("User", new mongoose.Schema({
+  name:String,
+  email:{type:String,unique:true},
+  password:String
+}))
+
+const Product = mongoose.model("Product", new mongoose.Schema({
+  name:String,
+  price:Number,
+  description:String
+}))
+
+const Booking = mongoose.model("Booking", new mongoose.Schema({
+  userId:String,
+  date:String,
+  time:String
+}))
+
+/* ================= MIDDLEWARE ================= */
+
+function auth(req,res,next){
+  const token = req.headers.authorization
+  if(!token) return res.status(401).json("No token")
+  try{
+    const decoded = jwt.verify(token,process.env.JWT_SECRET)
+    req.user = decoded
+    next()
+  }catch{
+    res.status(401).json("Invalid token")
+  }
+}
+
+/* ================= AUTH ================= */
+
+app.post("/api/register", async(req,res)=>{
+  const hashed = await bcrypt.hash(req.body.password,10)
+  const user = await User.create({
+    name:req.body.name,
+    email:req.body.email,
+    password:hashed
+  })
+  res.json(user)
+})
+
+app.post("/api/login", async(req,res)=>{
+  const user = await User.findOne({email:req.body.email})
+  if(!user) return res.status(400).json("User not found")
+  const valid = await bcrypt.compare(req.body.password,user.password)
+  if(!valid) return res.status(400).json("Wrong password")
+  const token = jwt.sign({id:user._id},process.env.JWT_SECRET)
+  res.json({token})
+})
+
+/* ================= PRODUCTS ================= */
+
+app.post("/api/products", async(req,res)=>{
+  const product = await Product.create(req.body)
+  res.json(product)
+})
+
+app.get("/api/products", async(req,res)=>{
+  const products = await Product.find()
+  res.json(products)
+})
+
+/* ================= BOOKING ================= */
+
+app.post("/api/bookings", auth, async(req,res)=>{
+  const exists = await Booking.findOne({date:req.body.date})
+  if(exists) return res.status(400).json("Already booked")
+  const booking = await Booking.create({
+    userId:req.user.id,
+    date:req.body.date,
+    time:req.body.time
+  })
+  res.json(booking)
+})
+
+/* ================= RAZORPAY ================= */
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_SECRET
+})
+
+app.post("/api/create-order", async(req,res)=>{
+  const order = await razorpay.orders.create({
+    amount:req.body.amount * 100,
+    currency:"INR"
+  })
+  res.json(order)
+})
+
+/* ================= FRONTEND ================= */
+
+app.get("/",(req,res)=>{
+  res.sendFile(path.join(__dirname,"public/index.html"))
+})
+
+app.listen(process.env.PORT || 5000,()=>{
+  console.log("Server Running")
+})
